@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+var errNotFound = errors.New("not found service method")
+
 // StreamInterceptorChain returns stream interceptors chain.
 func StreamInterceptorChain(interceptors ...grpc.StreamServerInterceptor) grpc.StreamServerInterceptor {
 	build := func(c grpc.StreamServerInterceptor, n grpc.StreamHandler, info *grpc.StreamServerInfo) grpc.StreamHandler {
@@ -49,7 +51,7 @@ func RecoveryStreamServerInterceptor(role string) grpc.StreamServerInterceptor {
 	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				defaultLogger.Errorf("[%s] grpc stream %s panic recovery, err: %v", role, info.FullMethod, rec)
+				defaultLogger.Errorf("[%s] grpc stream %s panic recovery, err: %v, stack: %s", role, info.FullMethod, rec, getStack(2))
 				err = StatusInternal(rec)
 			}
 		}()
@@ -62,7 +64,7 @@ func RecoveryUnaryServerInterceptor(role string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				defaultLogger.Errorf("[%s] grpc unary %s panic recovery, err: %v", role, info.FullMethod, rec)
+				defaultLogger.Errorf("[%s] grpc unary %s panic recovery, err: %v, stack: %s", role, info.FullMethod, rec, getStack(2))
 				err = StatusInternal(rec)
 			}
 		}()
@@ -79,6 +81,52 @@ func LoggerUnaryInterceptor(role string) grpc.UnaryServerInterceptor {
 		resp, err = handler(ctx, req)
 		defaultLogger.Infof("[%s] finish grpc unary request %s, cost: %v", role, info.FullMethod, time.Since(start).String())
 
+		return resp, err
+	}
+}
+
+// IPAllowUnaryInterceptor allow ips only
+func IPAllowUnaryInterceptor(allowIps []string) grpc.UnaryServerInterceptor {
+	allowMap := map[string]bool{}
+	for _, ip := range allowIps {
+		allowMap[ip] = true
+	}
+
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+		peer := GetRealAddr(ctx)
+		if peer == "" {
+			peer = GetPeerAddr(ctx)
+		}
+
+		if _, ok := allowMap[peer]; ok {
+			resp, err = handler(ctx, req)
+			return resp, err
+		}
+
+		defaultLogger.Errorf("host [%s] request [%s] can't allow request", peer, info.FullMethod)
+		return nil, status.Errorf(codes.ResourceExhausted, "host [%s] request [%s] can not allow request", peer, info.FullMethod)
+	}
+}
+
+// IPDenyUnaryInterceptor deny black ip list only
+func IPDenyUnaryInterceptor(denyIPs []string) grpc.UnaryServerInterceptor {
+	denyMap := map[string]bool{}
+	for _, ip := range denyIPs {
+		denyMap[ip] = true
+	}
+
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+		peer := GetRealAddr(ctx)
+		if peer == "" {
+			peer = GetPeerAddr(ctx)
+		}
+
+		if _, ok := denyMap[peer]; ok {
+			defaultLogger.Errorf("host [%s] request [%s] can't allow request", peer, info.FullMethod)
+			return nil, status.Errorf(codes.ResourceExhausted, "host [%s] request [%s] can not allow request", peer, info.FullMethod)
+		}
+
+		resp, err = handler(ctx, req)
 		return resp, err
 	}
 }
@@ -106,6 +154,18 @@ func MethodRateLimiterUnaryInterceptor(limiter *RateLimiterPool) grpc.UnaryServe
 
 		resp, err = handler(ctx, req)
 		return resp, err
+	}
+}
+
+func UnknowServiceHandler() grpc.StreamHandler {
+	return func(srv interface{}, stream grpc.ServerStream) error {
+		fullMethod, ok := grpc.MethodFromServerStream(stream)
+		if ok {
+			defaultLogger.Errorf("not found service method")
+		} else {
+			defaultLogger.Errorf("not found service method %s", fullMethod)
+		}
+		return errNotFound
 	}
 }
 
