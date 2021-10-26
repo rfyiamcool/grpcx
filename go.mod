@@ -1,4 +1,4 @@
-module github.com/rfyiamcool/grpcpp
+module github.com/rfyiamcool/grpcx
 
 go 1.14
 
