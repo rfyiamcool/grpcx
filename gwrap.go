@@ -2,6 +2,7 @@ package grpcx
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
@@ -52,7 +53,7 @@ func RecoveryStreamServerInterceptor(role string) grpc.StreamServerInterceptor {
 		defer func() {
 			if rec := recover(); rec != nil {
 				defaultLogger.Errorf("[%s] grpc stream %s panic recovery, err: %v, stack: %s", role, info.FullMethod, rec, getStack(2))
-				err = StatusInternal(rec)
+				err = StatusInternal(fmt.Sprintf("%v", rec))
 			}
 		}()
 		return handler(srv, stream)
@@ -65,7 +66,7 @@ func RecoveryUnaryServerInterceptor(role string) grpc.UnaryServerInterceptor {
 		defer func() {
 			if rec := recover(); rec != nil {
 				defaultLogger.Errorf("[%s] grpc unary %s panic recovery, err: %v, stack: %s", role, info.FullMethod, rec, getStack(2))
-				err = StatusInternal(rec)
+				err = StatusInternal(fmt.Sprintf("%v", rec))
 			}
 		}()
 		resp, err = handler(ctx, req)
